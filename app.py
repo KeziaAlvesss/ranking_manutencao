@@ -256,7 +256,7 @@ with col_left:
     df_rank = pd.read_sql(query_rank, conn)
     df_rank["Recompensa (R$)"] = df_rank["pontos"] * VALOR_PONTO
     st.dataframe(df_rank, use_container_width=True, hide_index=True)
-    
+
     # Gráfico de Ranking (barras horizontais)
     st.markdown('<div class="section-title">📈 Visualização do Ranking</div>', unsafe_allow_html=True)
     fig = go.Figure(go.Bar(
@@ -324,7 +324,7 @@ with col_right:
                 except sqlite3.IntegrityError:
                     st.warning("⚠️ Já existe.")
     
-    # Editar/excluir
+    # Editar/excluir penalidade
     with st.expander("✏️ Editar/Excluir", expanded=False):
         df_pen = pd.read_sql("SELECT id, descricao, valor FROM tipos_penalidade ORDER BY valor", conn)
         if not df_pen.empty:
