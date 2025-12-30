@@ -256,6 +256,22 @@ with col_left:
     df_rank = pd.read_sql(query_rank, conn)
     df_rank["Recompensa (R$)"] = df_rank["pontos"] * VALOR_PONTO
     st.dataframe(df_rank, use_container_width=True, hide_index=True)
+    
+    # Gráfico de Ranking (barras horizontais)
+    st.markdown('<div class="section-title">📈 Visualização do Ranking</div>', unsafe_allow_html=True)
+    fig = go.Figure(go.Bar(
+        x=df_rank["pontos"],
+        y=df_rank["nome"],
+        orientation='h',
+        marker_color='#3b82f6'
+    ))
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=20, b=0),
+        xaxis_title="Pontos",
+        yaxis={'categoryorder': 'total ascending'},
+        height=250
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 # =================================================
 # COLUNA DA DIREITA: GESTÃO ADMINISTRATIVA
