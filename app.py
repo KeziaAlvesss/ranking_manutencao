@@ -23,15 +23,6 @@ def get_conn():
 conn = get_conn()
 cursor = conn.cursor()
 
-# =====================================
-# MIGRAÇÃO: ADICIONAR COLUNA 'ativo'
-# =====================================
-try:
-    cursor.execute("ALTER TABLE colaboradores ADD COLUMN ativo INTEGER DEFAULT 1")
-    conn.commit()
-except sqlite3.OperationalError:
-    pass
-
 # =================================================
 # CRIAÇÃO DAS TABELAS
 # =================================================
@@ -61,7 +52,24 @@ CREATE TABLE IF NOT EXISTS tipos_penalidade (
     valor INTEGER NOT NULL
 )
 """)
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS usuarios (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    senha TEXT NOT NULL
+)
+""")
 conn.commit()
+
+# =====================================
+# MIGRAÇÃO: ADICIONAR COLUNA 'ativo'
+# =====================================
+try:
+    cursor.execute("ALTER TABLE colaboradores ADD COLUMN ativo INTEGER DEFAULT 1")
+    conn.commit()
+except sqlite3.OperationalError:
+    pass
 
 # =================================================
 # PENALIDADES PADRÃO
@@ -99,6 +107,15 @@ for desc, valor in penalidades_iniciais:
 conn.commit()
 
 # =================================================
+# USUÁRIO PADRÃO (opcional)
+# =================================================
+try:
+    cursor.execute("INSERT INTO usuarios (username, senha) VALUES (?, ?)", ("admin", "admin123"))
+    conn.commit()
+except sqlite3.IntegrityError:
+    pass
+
+# =================================================
 # INSERÇÃO INICIAL DE COLABORADORES
 # =================================================
 iniciais = ["André Omena", "Junior", "Rafael Dantas", "Tiago Silva"]
@@ -110,7 +127,32 @@ for nome in iniciais:
 conn.commit()
 
 # =================================================
-# CSS MELHORADO (layout em colunas + design refinado)
+# FUNÇÕES DE AUTENTICAÇÃO
+# =================================================
+def verificar_login(usuario, senha):
+    cursor.execute("SELECT 1 FROM usuarios WHERE username = ? AND senha = ?", (usuario, senha))
+    return cursor.fetchone() is not None
+
+def cadastrar_usuario(usuario, senha):
+    if len(senha) < 4:
+        return False, "A senha deve ter pelo menos 4 caracteres."
+    try:
+        cursor.execute("INSERT INTO usuarios (username, senha) VALUES (?, ?)", (usuario, senha))
+        conn.commit()
+        return True, "Usuário cadastrado com sucesso!"
+    except sqlite3.IntegrityError:
+        return False, "Nome de usuário já existe."
+
+# =================================================
+# ESTADO DA SESSÃO
+# =================================================
+if "logado" not in st.session_state:
+    st.session_state.logado = False
+if "mostrar_cadastro" not in st.session_state:
+    st.session_state.mostrar_cadastro = False
+
+# =================================================
+# CSS MELHORADO
 # =================================================
 st.markdown("""
 <style>
@@ -166,213 +208,303 @@ body {
     border-radius: 10px;
     margin-bottom: 12px;
 }
+/* Ajustes para mobile */
+@media (max-width: 768px) {
+    .main-header {
+        text-align: center;
+        padding: 16px;
+    }
+    .section-title {
+        font-size: 1.15rem;
+        margin: 12px 0 10px 0;
+    }
+    .kpi-box h2 {
+        font-size: 1.4rem;
+    }
+    .card {
+        padding: 16px;
+    }
+    /* Força colunas empilhadas em mobile */
+    [data-testid="column"] {
+        width: 100% !important;
+        flex: 1 !important;
+    }
+}
 </style>
 """, unsafe_allow_html=True)
 
 # =================================================
-# HEADER
+# LÓGICA PRINCIPAL
 # =================================================
-st.markdown('<div class="main-header">', unsafe_allow_html=True)
-col_logo, col_titulo = st.columns([1, 5])
-with col_logo:
-    st.image("logo.png", width=120)
-with col_titulo:
-    st.markdown("### 🔧 **Ranking de Recompensas - Manutenção**")
-    st.markdown("Gerenciamento de Pontos e Recompensas • **R$ 1,60 por ponto**")
-st.markdown('</div>', unsafe_allow_html=True)
+if not st.session_state.logado:
+    if not st.session_state.mostrar_cadastro:
+        # ==============================
+        # TELA DE LOGIN
+        # ==============================
+        st.markdown('<div class="main-header">', unsafe_allow_html=True)
+        col_logo, col_titulo = st.columns([1, 5])
+        with col_logo:
+            try:
+                st.image("logo.png", width=120)
+            except:
+                st.write("LOGO")
+        with col_titulo:
+            st.markdown("### 🔐 **Login - Ranking de Recompensas**")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-# =================================================
-# COLUNAS PRINCIPAIS
-# =================================================
-col_left, col_right = st.columns([2, 1], gap="medium")
+        st.markdown('<div class="card" style="max-width: 400px; margin: 40px auto;">', unsafe_allow_html=True)
+        st.markdown("#### Acesse sua conta")
+        usuario = st.text_input("Usuário", key="login_user")
+        senha = st.text_input("Senha", type="password", key="login_pass")
 
-# =================================================
-# COLUNA DA ESQUERDA: AÇÕES PRINCIPAIS
-# =================================================
-with col_left:
-
-    # Seleção de colaborador
-    df_colab = pd.read_sql("SELECT * FROM colaboradores WHERE ativo = 1", conn)
-    st.markdown('<div class="section-title">👤 Selecionar Colaborador</div>', unsafe_allow_html=True)
-    colaborador = st.selectbox(
-        " ",
-        ["Selecione"] + df_colab["nome"].tolist(),
-        label_visibility="collapsed"
-    )
-
-    # Métricas (KPIs)
-    if colaborador != "Selecione":
-        query = """
-        SELECT 
-            c.pontos_iniciais + IFNULL(SUM(h.pontos),0) pontos,
-            ABS(IFNULL(SUM(CASE WHEN h.pontos < 0 THEN h.pontos END),0)) penalidades
-        FROM colaboradores c
-        LEFT JOIN historico h ON h.colaborador_id = c.id
-        WHERE c.nome = ?
-        """
-        pontos, total_penalidades = cursor.execute(query, (colaborador,)).fetchone()
-        recompensa = max(pontos, 0) * VALOR_PONTO
-    else:
-        pontos = total_penalidades = recompensa = 0
-
-    st.markdown('<div class="section-title">📊 Métricas Atuais</div>', unsafe_allow_html=True)
-    k1, k2, k3 = st.columns(3)
-    with k1:
-        st.markdown(f'<div class="kpi-box pontos"><h4>Pontos</h4><h2>{pontos}</h2></div>', unsafe_allow_html=True)
-    with k2:
-        st.markdown(f'<div class="kpi-box recompensa"><h4>Recompensa</h4><h2>R$ {recompensa:,.2f}</h2></div>', unsafe_allow_html=True)
-    with k3:
-        st.markdown(f'<div class="kpi-box penalidades"><h4>Penalidades</h4><h2>{total_penalidades}</h2></div>', unsafe_allow_html=True)
-
-    # Aplicar Penalidade
-    st.markdown('<div class="section-title">⚠️ Aplicar Penalidade</div>', unsafe_allow_html=True)
-    df_penalidades = pd.read_sql("SELECT descricao, valor FROM tipos_penalidade ORDER BY valor, descricao", conn)
-    penalidades = dict(zip(df_penalidades["descricao"], df_penalidades["valor"]))
-    pen = st.selectbox(" ", ["Selecione"] + list(penalidades.keys()), label_visibility="collapsed")
-    
-    if st.button("Aplicar Penalidade"):
-        if colaborador != "Selecione" and pen != "Selecione":
-            colab_id = cursor.execute("SELECT id FROM colaboradores WHERE nome = ?", (colaborador,)).fetchone()[0]
-            cursor.execute("""
-                INSERT INTO historico (colaborador_id, pontos, descricao, data)
-                VALUES (?, ?, ?, ?)
-            """, (colab_id, penalidades[pen], pen, datetime.now()))
-            conn.commit()
-            st.success("✅ Penalidade aplicada!")
-            st.rerun()
-
-    # Ranking Geral
-    st.markdown('<div class="section-title">🏆 Ranking Geral</div>', unsafe_allow_html=True)
-    query_rank = """
-    SELECT 
-        c.nome,
-        c.pontos_iniciais + IFNULL(SUM(h.pontos),0) pontos
-    FROM colaboradores c
-    LEFT JOIN historico h ON h.colaborador_id = c.id
-    WHERE c.ativo = 1
-    GROUP BY c.id
-    ORDER BY pontos DESC
-    """
-    df_rank = pd.read_sql(query_rank, conn)
-    df_rank["Recompensa (R$)"] = df_rank["pontos"] * VALOR_PONTO
-    st.dataframe(df_rank, use_container_width=True, hide_index=True)
-
-    # Gráfico de Ranking (barras horizontais)
-    st.markdown('<div class="section-title">📈 Visualização do Ranking</div>', unsafe_allow_html=True)
-    fig = go.Figure(go.Bar(
-        x=df_rank["pontos"],
-        y=df_rank["nome"],
-        orientation='h',
-        marker_color='#3b82f6'
-    ))
-    fig.update_layout(
-        margin=dict(l=0, r=0, t=20, b=0),
-        xaxis_title="Pontos",
-        yaxis={'categoryorder': 'total ascending'},
-        height=250
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-# =================================================
-# COLUNA DA DIREITA: GESTÃO ADMINISTRATIVA
-# =================================================
-with col_right:
-
-    # Adicionar Colaborador
-    st.markdown('<div class="section-title">➕ Adicionar Colaborador</div>', unsafe_allow_html=True)
-    with st.expander("Cadastrar novo colaborador", expanded=False):
-        novo = st.text_input("Nome do colaborador")
-        if st.button("Adicionar"):
-            if novo.strip():
-                try:
-                    cursor.execute("INSERT INTO colaboradores (nome, pontos_iniciais, ativo) VALUES (?, ?, 1)", (novo, 100))
-                    conn.commit()
-                    st.success("✅ Colaborador adicionado!")
-                    st.rerun()
-                except:
-                    st.warning("⚠️ Colaborador já existe!")
-
-    # Inativar Colaborador
-    st.markdown('<div class="section-title">🛑 Inativar Colaborador</div>', unsafe_allow_html=True)
-    df_ativos = pd.read_sql("SELECT nome FROM colaboradores WHERE ativo = 1", conn)
-    with st.expander("Desligamento / Inativação", expanded=False):
-        colab_inativar = st.selectbox("Selecione", ["Selecione"] + df_ativos["nome"].tolist(), key="inativar")
-        confirmar = st.checkbox("Confirmo a inativação")
-        if st.button("Inativar"):
-            if colab_inativar != "Selecione" and confirmar:
-                cursor.execute("UPDATE colaboradores SET ativo = 0 WHERE nome = ?", (colab_inativar,))
-                conn.commit()
-                st.success("✅ Colaborador inativado!")
+        if st.button("Entrar", type="primary", use_container_width=True):
+            if verificar_login(usuario, senha):
+                st.session_state.logado = True
+                st.session_state.usuario = usuario
                 st.rerun()
             else:
-                st.warning("⚠️ Selecione e confirme.")
+                st.error("❌ Usuário ou senha incorretos.")
 
-    # Gerenciar Penalidades
-    st.markdown('<div class="section-title">📝 Gerenciar Penalidades</div>', unsafe_allow_html=True)
-    
-    # Adicionar nova
-    with st.expander("➕ Nova penalidade", expanded=False):
-        desc_nova = st.text_input("Descrição")
-        valor_novo = st.number_input("Valor (negativo)", value=-5, step=1, format="%d", key="nova_val")
-        if st.button("Salvar"):
-            if desc_nova.strip():
-                try:
-                    cursor.execute("INSERT INTO tipos_penalidade (descricao, valor) VALUES (?, ?)", (desc_nova.strip(), int(valor_novo)))
-                    conn.commit()
-                    st.success("✅ Salva!")
+        st.markdown("---")
+        if st.button("➕ Criar nova conta", use_container_width=True):
+            st.session_state.mostrar_cadastro = True
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    else:
+        # ==============================
+        # TELA DE CADASTRO
+        # ==============================
+        st.markdown('<div class="main-header">', unsafe_allow_html=True)
+        col_logo, col_titulo = st.columns([1, 5])
+        with col_logo:
+            try:
+                st.image("logo.png", width=120)
+            except:
+                st.write("LOGO")
+        with col_titulo:
+            st.markdown("### 📝 **Criar Conta**")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="card" style="max-width: 400px; margin: 40px auto;">', unsafe_allow_html=True)
+        st.markdown("#### Preencha seus dados")
+        novo_usuario = st.text_input("Nome de usuário", key="cad_user")
+        nova_senha = st.text_input("Senha (mín. 4 caracteres)", type="password", key="cad_pass")
+        confirmar_senha = st.text_input("Confirmar senha", type="password", key="cad_pass2")
+
+        msg = st.empty()
+
+        if st.button("Cadastrar", type="primary", use_container_width=True):
+            if not novo_usuario.strip():
+                msg.error("❌ O nome de usuário não pode estar vazio.")
+            elif nova_senha != confirmar_senha:
+                msg.error("❌ As senhas não coincidem.")
+            elif len(nova_senha) < 4:
+                msg.error("❌ A senha deve ter pelo menos 4 caracteres.")
+            else:
+                sucesso, mensagem = cadastrar_usuario(novo_usuario.strip(), nova_senha)
+                if sucesso:
+                    msg.success(f"✅ {mensagem} Faça login agora!")
+                    st.session_state.mostrar_cadastro = False
                     st.rerun()
-                except sqlite3.IntegrityError:
-                    st.warning("⚠️ Já existe.")
-    
-    # Editar/excluir penalidade
-    with st.expander("✏️ Editar/Excluir", expanded=False):
-        df_pen = pd.read_sql("SELECT id, descricao, valor FROM tipos_penalidade ORDER BY valor", conn)
-        if not df_pen.empty:
-            sel = st.selectbox("Escolha", df_pen["descricao"].tolist(), key="edit_sel")
-            row = df_pen[df_pen["descricao"] == sel].iloc[0]
-            new_desc = st.text_input("Descrição", value=row["descricao"], key="ed_desc")
-            new_val = st.number_input("Valor", value=int(row["valor"]), step=1, key="ed_val")
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("💾 Atualizar"):
+                else:
+                    msg.error(f"❌ {mensagem}")
+
+        st.markdown("---")
+        if st.button("← Voltar para o login", use_container_width=True):
+            st.session_state.mostrar_cadastro = False
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+else:
+    # ==============================
+    # DASHBOARD PRINCIPAL
+    # ==============================
+
+    st.markdown('<div class="main-header">', unsafe_allow_html=True)
+    col_logo, col_titulo = st.columns([1, 5])
+    with col_logo:
+        try:
+            st.image("logo.png", width=120)
+        except:
+            st.write("LOGO")
+    with col_titulo:
+        st.markdown("### 🔧 **Ranking de Recompensas - Manutenção**")
+        st.markdown("Gerenciamento de Pontos e Recompensas • **R$ 1,60 por ponto**")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    col_left, col_right = st.columns([2, 1], gap="medium")
+
+    with col_left:
+        df_colab = pd.read_sql("SELECT * FROM colaboradores WHERE ativo = 1", conn)
+        st.markdown('<div class="section-title">👤 Selecionar Colaborador</div>', unsafe_allow_html=True)
+        colaborador = st.selectbox(
+            " ",
+            ["Selecione"] + df_colab["nome"].tolist(),
+            label_visibility="collapsed"
+        )
+
+        if colaborador != "Selecione":
+            query = """
+            SELECT 
+                c.pontos_iniciais + IFNULL(SUM(h.pontos),0) pontos,
+                ABS(IFNULL(SUM(CASE WHEN h.pontos < 0 THEN h.pontos END),0)) penalidades
+            FROM colaboradores c
+            LEFT JOIN historico h ON h.colaborador_id = c.id
+            WHERE c.nome = ?
+            """
+            pontos, total_penalidades = cursor.execute(query, (colaborador,)).fetchone()
+            recompensa = max(pontos, 0) * VALOR_PONTO
+        else:
+            pontos = total_penalidades = recompensa = 0
+
+        st.markdown('<div class="section-title">📊 Métricas Atuais</div>', unsafe_allow_html=True)
+        k1, k2, k3 = st.columns(3)
+        with k1:
+            st.markdown(f'<div class="kpi-box pontos"><h4>Pontos</h4><h2>{pontos}</h2></div>', unsafe_allow_html=True)
+        with k2:
+            st.markdown(f'<div class="kpi-box recompensa"><h4>Recompensa</h4><h2>R$ {recompensa:,.2f}</h2></div>', unsafe_allow_html=True)
+        with k3:
+            st.markdown(f'<div class="kpi-box penalidades"><h4>Penalidades</h4><h2>{total_penalidades}</h2></div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="section-title">⚠️ Aplicar Penalidade</div>', unsafe_allow_html=True)
+        df_penalidades = pd.read_sql("SELECT descricao, valor FROM tipos_penalidade ORDER BY valor, descricao", conn)
+        penalidades = dict(zip(df_penalidades["descricao"], df_penalidades["valor"]))
+        pen = st.selectbox(" ", ["Selecione"] + list(penalidades.keys()), label_visibility="collapsed")
+        
+        if st.button("Aplicar Penalidade"):
+            if colaborador != "Selecione" and pen != "Selecione":
+                colab_id = cursor.execute("SELECT id FROM colaboradores WHERE nome = ?", (colaborador,)).fetchone()[0]
+                cursor.execute("""
+                    INSERT INTO historico (colaborador_id, pontos, descricao, data)
+                    VALUES (?, ?, ?, ?)
+                """, (colab_id, penalidades[pen], pen, datetime.now()))
+                conn.commit()
+                st.success("✅ Penalidade aplicada!")
+                st.rerun()
+
+        st.markdown('<div class="section-title">🏆 Ranking Geral</div>', unsafe_allow_html=True)
+        query_rank = """
+        SELECT 
+            c.nome,
+            c.pontos_iniciais + IFNULL(SUM(h.pontos),0) pontos
+        FROM colaboradores c
+        LEFT JOIN historico h ON h.colaborador_id = c.id
+        WHERE c.ativo = 1
+        GROUP BY c.id
+        ORDER BY pontos DESC
+        """
+        df_rank = pd.read_sql(query_rank, conn)
+        df_rank["Recompensa (R$)"] = df_rank["pontos"] * VALOR_PONTO
+        st.dataframe(df_rank, use_container_width=True, hide_index=True)
+
+        st.markdown('<div class="section-title">📈 Visualização do Ranking</div>', unsafe_allow_html=True)
+        fig = go.Figure(go.Bar(
+            x=df_rank["pontos"],
+            y=df_rank["nome"],
+            orientation='h',
+            marker_color='#3b82f6'
+        ))
+        fig.update_layout(
+            margin=dict(l=0, r=0, t=20, b=0),
+            xaxis_title="Pontos",
+            yaxis={'categoryorder': 'total ascending'},
+            height=250
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col_right:
+        st.markdown('<div class="section-title">➕ Adicionar Colaborador</div>', unsafe_allow_html=True)
+        with st.expander("Cadastrar novo colaborador", expanded=False):
+            novo = st.text_input("Nome do colaborador")
+            if st.button("Adicionar"):
+                if novo.strip():
                     try:
-                        cursor.execute("UPDATE tipos_penalidade SET descricao = ?, valor = ? WHERE id = ?", (new_desc.strip(), new_val, row["id"]))
+                        cursor.execute("INSERT INTO colaboradores (nome, pontos_iniciais, ativo) VALUES (?, ?, 1)", (novo, 100))
                         conn.commit()
-                        st.success("✅ Atualizada!")
+                        st.success("✅ Colaborador adicionado!")
                         st.rerun()
                     except sqlite3.IntegrityError:
-                        st.warning("⚠️ Descrição duplicada.")
-            with c2:
-                cursor.execute("SELECT COUNT(*) FROM historico WHERE descricao = ?", (row["descricao"],))
-                usada = cursor.fetchone()[0] > 0
-                if st.button("🗑️ Excluir", disabled=usada):
-                    cursor.execute("DELETE FROM tipos_penalidade WHERE id = ?", (row["id"],))
+                        st.warning("⚠️ Colaborador já existe!")
+
+        st.markdown('<div class="section-title">🛑 Inativar Colaborador</div>', unsafe_allow_html=True)
+        df_ativos = pd.read_sql("SELECT nome FROM colaboradores WHERE ativo = 1", conn)
+        with st.expander("Desligamento / Inativação", expanded=False):
+            colab_inativar = st.selectbox("Selecione", ["Selecione"] + df_ativos["nome"].tolist(), key="inativar")
+            confirmar = st.checkbox("Confirmo a inativação")
+            if st.button("Inativar"):
+                if colab_inativar != "Selecione" and confirmar:
+                    cursor.execute("UPDATE colaboradores SET ativo = 0 WHERE nome = ?", (colab_inativar,))
                     conn.commit()
-                    st.success("✅ Excluída!")
+                    st.success("✅ Colaborador inativado!")
                     st.rerun()
-                if usada:
-                    st.caption("⚠️ Usada no histórico")
+                else:
+                    st.warning("⚠️ Selecione e confirme.")
 
-    # Histórico com filtro
-    st.markdown('<div class="section-title">📜 Histórico (com filtro)</div>', unsafe_allow_html=True)
-    if colaborador != "Selecione":
-        data_ini = st.date_input("De", value=date.today().replace(day=1), key="hi")
-        data_fim = st.date_input("Até", value=date.today(), key="hf")
-        data_ini_dt = datetime.combine(data_ini, datetime.min.time())
-        data_fim_dt = datetime.combine(data_fim, datetime.max.time())
-        hist = pd.read_sql("""
-            SELECT descricao, pontos, substr(data, 1, 16) as data
-            FROM historico h
-            JOIN colaboradores c ON c.id = h.colaborador_id
-            WHERE c.nome = ? AND h.data BETWEEN ? AND ?
-            ORDER BY data DESC
-        """, conn, params=(colaborador, data_ini_dt, data_fim_dt))
-        st.dataframe(hist, use_container_width=True, hide_index=True)
-    else:
-        st.info("Selecione um colaborador.")
+        st.markdown('<div class="section-title">📝 Gerenciar Penalidades</div>', unsafe_allow_html=True)
+        with st.expander("➕ Nova penalidade", expanded=False):
+            desc_nova = st.text_input("Descrição")
+            valor_novo = st.number_input("Valor (negativo)", value=-5, step=1, format="%d", key="nova_val")
+            if st.button("Salvar"):
+                if desc_nova.strip():
+                    try:
+                        cursor.execute("INSERT INTO tipos_penalidade (descricao, valor) VALUES (?, ?)", (desc_nova.strip(), int(valor_novo)))
+                        conn.commit()
+                        st.success("✅ Salva!")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.warning("⚠️ Já existe.")
+        
+        with st.expander("✏️ Editar/Excluir", expanded=False):
+            df_pen = pd.read_sql("SELECT id, descricao, valor FROM tipos_penalidade ORDER BY valor", conn)
+            if not df_pen.empty:
+                sel = st.selectbox("Escolha", df_pen["descricao"].tolist(), key="edit_sel")
+                row = df_pen[df_pen["descricao"] == sel].iloc[0]
+                new_desc = st.text_input("Descrição", value=row["descricao"], key="ed_desc")
+                new_val = st.number_input("Valor", value=int(row["valor"]), step=1, key="ed_val")
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("💾 Atualizar"):
+                        try:
+                            cursor.execute("UPDATE tipos_penalidade SET descricao = ?, valor = ? WHERE id = ?", (new_desc.strip(), new_val, row["id"]))
+                            conn.commit()
+                            st.success("✅ Atualizada!")
+                            st.rerun()
+                        except sqlite3.IntegrityError:
+                            st.warning("⚠️ Descrição duplicada.")
+                with c2:
+                    cursor.execute("SELECT COUNT(*) FROM historico WHERE descricao = ?", (row["descricao"],))
+                    usada = cursor.fetchone()[0] > 0
+                    if st.button("🗑️ Excluir", disabled=usada):
+                        cursor.execute("DELETE FROM tipos_penalidade WHERE id = ?", (row["id"],))
+                        conn.commit()
+                        st.success("✅ Excluída!")
+                        st.rerun()
+                    if usada:
+                        st.caption("⚠️ Usada no histórico")
 
-# =================================================
-# RODAPÉ (opcional)
-# =================================================
-st.markdown("<hr style='margin-top: 40px; border: none; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
-st.caption("Sistema de Gestão de Pontos • Atualizado em tempo real")
+        st.markdown('<div class="section-title">📜 Histórico (com filtro)</div>', unsafe_allow_html=True)
+        if colaborador != "Selecione":
+            data_ini = st.date_input("De", value=date.today().replace(day=1), key="hi")
+            data_fim = st.date_input("Até", value=date.today(), key="hf")
+            data_ini_dt = datetime.combine(data_ini, datetime.min.time())
+            data_fim_dt = datetime.combine(data_fim, datetime.max.time())
+            hist = pd.read_sql("""
+                SELECT descricao, pontos, substr(data, 1, 16) as data
+                FROM historico h
+                JOIN colaboradores c ON c.id = h.colaborador_id
+                WHERE c.nome = ? AND h.data BETWEEN ? AND ?
+                ORDER BY data DESC
+            """, conn, params=(colaborador, data_ini_dt, data_fim_dt))
+            st.dataframe(hist, use_container_width=True, hide_index=True)
+        else:
+            st.info("Selecione um colaborador.")
+
+    st.markdown("<hr style='margin-top: 40px; border: none; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
+    st.caption("Sistema de Gestão de Pontos • Atualizado em tempo real")
+
+    with st.sidebar:
+        st.write(f"👤 Logado como: **{st.session_state.usuario}**")
+        if st.button("🚪 Sair"):
+            st.session_state.logado = False
+            st.rerun()
