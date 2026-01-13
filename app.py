@@ -229,6 +229,16 @@ body {
         width: 100% !important;
         flex: 1 !important;
     }
+    /* Ajuste para dark mode */
+    [data-theme="dark"] .kpi-box h2,
+    [data-theme="dark"] .kpi-box h4 {
+    color: #1e3a8a !important;
+    }
+
+    [data-theme="dark"] .kpi-box {
+    background: #ffffff !important;
+    color: #1e3a8a !important;
+    }
 }
 </style>
 """, unsafe_allow_html=True)
